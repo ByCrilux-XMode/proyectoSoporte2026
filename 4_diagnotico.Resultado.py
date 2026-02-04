@@ -1,6 +1,6 @@
 import pyodbc
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
 def poblar_resultados_analiticos():
     conn_str = ('DRIVER={ODBC Driver 17 for SQL Server};'
@@ -48,13 +48,23 @@ def poblar_resultados_analiticos():
     id_det_res_cont = 1
 
     for det_id, ex_id, muestra_id, fecha_o in examenes_a_procesar:
-        id_bio = random.choice(ids_bioquimicos)
         
+        id_bio = random.choice(ids_bioquimicos)
+        categoria = random.choices(['PROMEDIO', 'REGULAR', 'PEOR'], weights=[0.75, 0.20, 0.05], k=1)[0]
+
+        if categoria == 'PROMEDIO':
+            dias_retraso = random.randint(1, 3)
+        elif categoria == 'REGULAR':
+            dias_retraso = random.randint(4, 6)
+        else: # PEOR
+            dias_retraso = random.randint(7, 15)
+
+        fecha_resultado = fecha_o + timedelta(days=dias_retraso)
         # A. Insertar Cabecera de Resultado (Relación 1:1 con detalle_orden_examen)
         cursor.execute("""
             INSERT INTO resultado (id_resultado, fecha, id_bioquimico, id_detalle_orden_examen, id_muestra)
             VALUES (?, ?, ?, ?, ?)""",
-            (id_res_cont, fecha_o, id_bio, det_id, muestra_id)
+            (id_res_cont, fecha_resultado.strftime('%Y-%m-%d'), id_bio, det_id, muestra_id)
         )
 
         # B. Generar Detalles de Resultado (Valores para cada parámetro)
