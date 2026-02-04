@@ -1,4 +1,4 @@
---use LabX
+--use LabX2
 
 insert into departamento (id_departamento, nombre_departamento, sigla) values 
 (1, 'Santa Cruz', 'SC'),

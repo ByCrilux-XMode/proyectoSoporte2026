@@ -136,9 +136,7 @@ create table muestra( --metodo
     observacion varchar(200),
     codigo_muestra varchar(30) not null,
     id_tipo_muestra int not null,
-    id_orden_lab int not null,
-    foreign key (id_tipo_muestra) references tipo_muestra(id_tipo_muestra),
-    foreign key (id_orden_lab) references orden_laboratorio(id_orden_lab)
+    foreign key (id_tipo_muestra) references tipo_muestra(id_tipo_muestra)
 );
 
 create table examen( --listo
@@ -154,7 +152,7 @@ create table examen_precio( --metodo
     precio decimal(10,2) not null,
     fecha_inicio date not null,
     fecha_fin date,
-    estado int not null,
+    estado int not null, --1 activo, 0 inactivo
     id_examen int not null,
     foreign key (id_examen) references examen(id_examen)
 );
@@ -170,27 +168,9 @@ create table examen_requisito_muestra( -- listo
     foreign key (id_tipo_muestra) references tipo_muestra(id_tipo_muestra)
 );
 
-create table resultado( --metodo
-    id_resultado int primary key not null,
-    fecha date not null,
-    id_bioquimico int not null,
-    id_examen int not null,
-    id_muestra int not null,
-    id_orden_lab int not null,
-    foreign key (id_bioquimico) references bioquimico(id_bioquimico),
-    foreign key (id_examen) references examen(id_examen),
-    foreign key (id_muestra) references muestra(id_muestra),
-    foreign key (id_orden_lab) references orden_laboratorio(id_orden_lab)
-);
 
-create table hallazgo_diagnostico( --metodo
-    descripcion varchar(200) not null,
-    id_enfermedad int not null,
-    id_resultado int not null,
-    primary key (id_enfermedad, id_resultado),
-    foreign key (id_enfermedad) references enfermedad(id_enfermedad),
-    foreign key (id_resultado) references resultado(id_resultado)
-);
+
+
 
 create table parametro( --listo
     id_parametro int primary key not null,
@@ -210,17 +190,7 @@ create table valor_referencia( --listo
     foreign key (id_parametro) references parametro(id_parametro)
 );
 
-create table detalle_resultado( --metodo
-    id_detalle_resultado int primary key not null,
-    valor_obtenido varchar(100) not null,
-    unidad_medida varchar(20) not null,
-    id_parametro int not null,
-    id_valor_ref int not null,
-    id_resultado int not null,
-    foreign key (id_parametro) references parametro(id_parametro),
-    foreign key (id_valor_ref) references valor_referencia(id_valor_ref),
-    foreign key (id_resultado) references resultado(id_resultado)
-);
+
 
 create table estado_factura( --listo
     id int primary key not null,
@@ -242,17 +212,51 @@ create table factura( --metodo
     foreign key (id_metodo_pago) references metodo_pago(id_metodo_pago)
 );
 
+
 create table detalle_orden_examen( --metodo
     id_detalle_orden_examen int primary key not null,
     id_orden_lab int not null,
     id_examen int not null,
+    id_muestra int not null,
+    foreign key (id_muestra) references muestra(id_muestra),
     foreign key (id_orden_lab) references orden_laboratorio(id_orden_lab),
     foreign key (id_examen) references examen(id_examen)
 );
 
+create table resultado( --metodo
+    id_resultado int primary key not null,
+    fecha date not null,
+    id_bioquimico int not null,
+    id_muestra int not null,
+    id_detalle_orden_examen int not null,
+    foreign key (id_bioquimico) references bioquimico(id_bioquimico),
+    foreign key (id_muestra) references muestra(id_muestra),
+    foreign key (id_detalle_orden_examen) references detalle_orden_examen(id_detalle_orden_examen)
+);
+
+create table hallazgo_diagnostico( --metodo
+    descripcion varchar(200) not null,
+    id_enfermedad int not null,
+    id_resultado int not null,
+    primary key (id_enfermedad, id_resultado),
+    foreign key (id_enfermedad) references enfermedad(id_enfermedad),
+    foreign key (id_resultado) references resultado(id_resultado)
+);
+
+create table detalle_resultado( --metodo
+    id_detalle_resultado int primary key not null,
+    valor_obtenido varchar(100) not null,
+    unidad_medida varchar(20) not null,
+    id_parametro int not null,
+    id_valor_ref int not null,
+    id_resultado int not null,
+    foreign key (id_parametro) references parametro(id_parametro),
+    foreign key (id_valor_ref) references valor_referencia(id_valor_ref),
+    foreign key (id_resultado) references resultado(id_resultado)
+);
+
 create table detalle_factura( --metodo
     id_detalle_factura int primary key not null,
-    cantidad int not null,
     precio_unitario decimal(10,2) not null, -- el precio de la table examen hpy
     descuento_linea decimal(10,2) not null, -- el descuento calculado hoy
     subtotal_linea decimal(10,2) not null, -- (precio unitario * cantidad) - descuento
