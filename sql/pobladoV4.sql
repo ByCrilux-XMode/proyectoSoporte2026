@@ -622,8 +622,3 @@ values
 (75, 'Negativo', 0.00, 0.00, 'Cualitativo', 79),           -- VPH
  -- Paternidad
 (76, 'Probabilidad > 99.99%', 0.00, 0.00, 'Porcentaje', 80);
-
-select d.nombre_departamento as Departamento, provincia.nombre_provincia as Provincia, provincia.id_provincia as IdProvincia
-from provincia
-join departamento as d on provincia.id_departamento = d.id_departamento
-where d.nombre_departamento = 'Santa Cruz'
