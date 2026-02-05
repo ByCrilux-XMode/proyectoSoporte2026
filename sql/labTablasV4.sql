@@ -1,4 +1,4 @@
---create database LabX2;
+create database LabX2;
 --use LabX2;
 
 create table departamento( --listo
@@ -227,10 +227,8 @@ create table resultado( --metodo
     id_resultado int primary key not null,
     fecha date not null,
     id_bioquimico int not null,
-    id_muestra int not null,
     id_detalle_orden_examen int not null,
     foreign key (id_bioquimico) references bioquimico(id_bioquimico),
-    foreign key (id_muestra) references muestra(id_muestra),
     foreign key (id_detalle_orden_examen) references detalle_orden_examen(id_detalle_orden_examen)
 );
 
@@ -261,7 +259,7 @@ create table detalle_factura( --metodo
     descuento_linea decimal(10,2) not null, -- el descuento calculado hoy
     subtotal_linea decimal(10,2) not null, -- (precio unitario * cantidad) - descuento
     id_factura int not null,
-    id_detalle_orden_examen int not null,
-    foreign key (id_detalle_orden_examen) references detalle_orden_examen(id_detalle_orden_examen),
+    id_examen int not null,
+    foreign key (id_examen) references examen(id_examen),
     foreign key (id_factura) references factura(id_factura)
 );

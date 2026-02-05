@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 def poblar_resultados_analiticos():
     conn_str = ('DRIVER={ODBC Driver 17 for SQL Server};'
-                'SERVER=localhost\SQLEXPRESS;'
+                'SERVER=localhost\\SQLEXPRESS;'
                 'DATABASE=LabX2;'
                 'Trusted_Connection=yes;')
     con = pyodbc.connect(conn_str)
@@ -12,29 +12,30 @@ def poblar_resultados_analiticos():
 
     print("Iniciando generación de resultados médicos...")
 
-    #coje id de bioquimicos y enfermedades
+    # 1. Preparación de Diccionarios y Listas (FUERA DEL BUCLE)
     cursor.execute("SELECT id_bioquimico FROM bioquimico")
     ids_bioquimicos = [row[0] for row in cursor.fetchall()]
 
-    cursor.execute("SELECT id_enfermedad FROM enfermedad")
-    ids_enfermedades = [row[0] for row in cursor.fetchall()]
+    logica_diagnostica = {
+        1: [2, 12, 14], 3: [2, 12], 5: [18], 6: [2, 14], 8: [1, 11],
+        9: [1, 11], 10: [16], 11: [16], 12: [15], 13: [4], 15: [5, 13],
+        16: [5, 13], 17: [7], 18: [9], 20: [17], 22: [18], 23: [8],
+        26: [10], 27: [10], 29: [6], 31: [16], 32: [6], 35: [3],
+        36: [3], 37: [3], 39: [19], 40: [1, 19], 48: [20]
+    }
 
-    # Traemos los parámetros con sus valores de referencia para generar números realistas
     cursor.execute("""
         SELECT p.id_parametro, p.id_examen, vr.id_valor_ref, vr.rango_minimo, vr.rango_maximo, vr.unidad_medida
         FROM parametro p
         JOIN valor_referencia vr ON p.id_parametro = vr.id_parametro
     """)
-
-    referencias = cursor.fetchall()
-   
     mapa_referencias = {}
-    for p_id, ex_id, ref_id, v_min, v_max, uni in referencias:
+    for p_id, ex_id, ref_id, v_min, v_max, uni in cursor.fetchall():
         if ex_id not in mapa_referencias:
             mapa_referencias[ex_id] = []
-        mapa_referencias[ex_id].append((p_id, ref_id, float(v_min), float(v_max), uni))
+        mapa_referencias[ex_id].append((p_id, ref_id, float(v_min or 0), float(v_max or 100), uni))
 
-    # 2. Obtener detalles de órdenes que están pagadas 
+    # 2. Obtener órdenes pagadas
     cursor.execute("""
         SELECT doe.id_detalle_orden_examen, doe.id_examen, doe.id_muestra, ol.fecha_orden
         FROM detalle_orden_examen doe
@@ -46,121 +47,64 @@ def poblar_resultados_analiticos():
 
     id_res_cont = 1
     id_det_res_cont = 1
+    batch_detalles = [] # Para inserción masiva
 
     for det_id, ex_id, muestra_id, fecha_o in examenes_a_procesar:
-        
         id_bio = random.choice(ids_bioquimicos)
-        categoria = random.choices(['PROMEDIO', 'REGULAR', 'PEOR'], weights=[0.75, 0.20, 0.05], k=1)[0]
+        
+        # Lógica de retraso
+        cat = random.choices(['P', 'R', 'E'], weights=[0.75, 0.20, 0.05], k=1)[0]
+        retraso = random.randint(1,3) if cat == 'P' else random.randint(4,6) if cat == 'R' else random.randint(7,15)
+        fecha_res = fecha_o + timedelta(days=retraso)
 
-        if categoria == 'PROMEDIO':
-            dias_retraso = random.randint(1, 3)
-        elif categoria == 'REGULAR':
-            dias_retraso = random.randint(4, 6)
-        else: # PEOR
-            dias_retraso = random.randint(7, 15)
-
-        fecha_resultado = fecha_o + timedelta(days=dias_retraso)
-        # A. Insertar Cabecera de Resultado (Relación 1:1 con detalle_orden_examen)
+        # A. Insertar Cabecera de Resultado
         cursor.execute("""
-            INSERT INTO resultado (id_resultado, fecha, id_bioquimico, id_detalle_orden_examen, id_muestra)
-            VALUES (?, ?, ?, ?, ?)""",
-            (id_res_cont, fecha_resultado.strftime('%Y-%m-%d'), id_bio, det_id, muestra_id)
+            INSERT INTO resultado (id_resultado, fecha, id_bioquimico, id_detalle_orden_examen)
+            VALUES (?, ?, ?, ?)""",
+            (id_res_cont, fecha_res.strftime('%Y-%m-%d'), id_bio, det_id)
         )
+        # Nota: He quitado id_muestra del INSERT porque quedamos en que ya no va ahí
 
-        # B. Generar Detalles de Resultado (Valores para cada parámetro)
-        # Si el examen tiene parámetros configurados en el sistema:
+        # B. Generar Detalles
+        fuera_de_rango = False
         if ex_id in mapa_referencias:
-            fuera_de_rango = False
             for p_id, ref_id, v_min, v_max, unidad in mapa_referencias[ex_id]:
-                # Simulamos un valor: 80% de probabilidad de estar sano, 20% de estar enfermo
                 es_sano = random.random() > 0.2
                 if es_sano:
-                    valor_final = random.uniform(v_min, v_max)
+                    valor = random.uniform(v_min, v_max)
                 else:
-                    # Generar valor alterado (por arriba o por abajo)
                     fuera_de_rango = True
-                    if random.choice([True, False]):
-                        valor_final = v_max + random.uniform(1, 20)
-                    else:
-                        valor_final = max(0, v_min - random.uniform(1, 10))
+                    valor = v_max + random.uniform(1, 15) if random.random() > 0.5 else max(0, v_min - random.uniform(1, 5))
 
-                cursor.execute("""
-                    INSERT INTO detalle_resultado (id_detalle_resultado, valor_obtenido, unidad_medida, id_parametro, id_valor_ref, id_resultado)
-                    VALUES (?, ?, ?, ?, ?, ?)""",
-                    (id_det_res_cont, round(valor_final, 2), unidad, p_id, ref_id, id_res_cont)
-                )
+                batch_detalles.append((id_det_res_cont, round(valor, 2), unidad, p_id, ref_id, id_res_cont))
                 id_det_res_cont += 1
 
-            logica_diagnostica = {
-                # AREA 1: HEMATOLOGÍA
-                1: [2, 12, 14], # HEMOGRAMA -> Anemia (2), Síndrome Anémico (12), Policitemia (14)
-                3: [2, 12],     # RETICULOCITOS -> Anemia (2, 12)
-                5: [18],        # VSG -> Artritis Reumatoide (18)
-                6: [2, 14],     # FROTIS -> Anemia (2), Policitemia (14)
-                
-                # AREA 2: QUÍMICA SANGUÍNEA
-                8: [1, 11],     # HBA1C -> Diabetes (1), Crisis Hiperglucémica (11)
-                9: [1, 11],     # GLICEMIA -> Diabetes (1), Crisis Hiperglucémica (11)
-                10: [16],       # CREATININA -> Síndrome Nefrótico (16)
-                11: [16],       # UREA -> Síndrome Nefrótico (16)
-                12: [15],       # ACIDO URICO -> Hiperuricemia (15)
-                13: [4],        # COLESTEROL -> Hipercolesterolemia (4)
-                15: [5, 13],    # TGO -> Hepatitis (5), Insuficiencia Hepática (13)
-                16: [5, 13],    # BILIRRUBINAS -> Hepatitis (5), Insuficiencia Hepática (13)
-                40: [1, 19],    # INSULINA -> Diabetes (1), Ovario Poliquístico (19)
+        # C. Insertar Hallazgo si aplica
+        if fuera_de_rango and ex_id in logica_diagnostica:
+            asociadas = logica_diagnostica[ex_id]
+            num = random.randint(1, min(2, len(asociadas)))
+            elegidas = random.sample(asociadas, num)
+            for enf_id in elegidas:
+                cursor.execute("INSERT INTO hallazgo_diagnostico VALUES (?, ?, ?)", 
+                               ("Hallazgos compatibles con cuadro clínico.", enf_id, id_res_cont))
 
-                # AREA 3: SEROLOGÍA / INMUNOLOGÍA
-                17: [7],        # WIDAL -> Fiebre Tifoidea (7)
-                18: [9],        # H. PYLORI -> Gastritis por H. Pylori (9)
-                20: [17],       # CHAGAS ELISA -> Chagas Crónico (17)
-                22: [18],       # RA TEST -> Artritis Reumatoide (18)
-                23: [8],        # DENGUE -> Dengue con signos de alarma (8)
-                
-                # AREA 4: COPROLOGÍA
-                26: [10],       # COPRO SIMPLE -> Amibiasis (10)
-                27: [10],       # MOCO FECAL -> Amibiasis (10)
-                
-                # AREA 5: ORINA
-                29: [6],        # EGO -> Infección Urinaria (6)
-                31: [16],       # PROTEINURIA -> Síndrome Nefrótico (16)
-                
-                # AREA 6: MICROBIOLOGÍA
-                32: [6],        # UROCULTIVO -> Infección Urinaria (6)
-                
-                # AREA 7: HORMONAS
-                35: [3],        # TSH -> Hipotiroidismo (3)
-                36: [3],        # T4 LIBRE -> Hipotiroidismo (3)
-                37: [3],        # T3 TOTAL -> Hipotiroidismo (3)
-                39: [19],       # PROLACTINA -> Ovario Poliquístico (19)
-                
-                # AREA 9: TOXICOLOGÍA
-                48: [20],       # PLOMO EN SANGRE -> Intoxicación por Metales Pesados (20)
-            }
-
-        if fuera_de_rango:
-            # 1. Buscamos qué enfermedades corresponden a ESTE examen específico
-            enfermedades_asociadas = logica_diagnostica.get(ex_id, [])
-            if enfermedades_asociadas:
-                # 2. De las asociadas, elegimos 1 o 2 para este paciente
-                num_hallazgos = random.randint(1, min(2, len(enfermedades_asociadas)))
-                enfermedades_paciente = random.sample(enfermedades_asociadas, num_hallazgos)
-
-                for enf_id in enfermedades_paciente:
-                    cursor.execute("""
-                        INSERT INTO hallazgo_diagnostico (descripcion, id_enfermedad, id_resultado)
-                        VALUES (?, ?, ?)""",
-                        ("Valores alterados sugieren sospecha clínica.", enf_id, id_res_cont)
-                    )
+        # Control de inserción masiva para detalles
+        if len(batch_detalles) >= 1000:
+            cursor.executemany("INSERT INTO detalle_resultado VALUES (?, ?, ?, ?, ?, ?)", batch_detalles)
+            con.commit()
+            batch_detalles = []
 
         id_res_cont += 1
-        
         if id_res_cont % 500 == 0:
-            con.commit()
-            print(f"Progreso: {id_res_cont} resultados médicos validados...")
+            print(f"Sincronizados {id_res_cont} informes médicos...")
 
+    # Insertar remanentes
+    if batch_detalles:
+        cursor.executemany("INSERT INTO detalle_resultado VALUES (?, ?, ?, ?, ?, ?)", batch_detalles)
+    
     con.commit()
     con.close()
-    print("--- Proceso Analítico finalizado: Base de datos LabX2 con datos médicos reales ---")
+    print("--- LabX2: Resultados y Diagnósticos finalizados con éxito ---")
 
 if __name__ == "__main__":
     poblar_resultados_analiticos()

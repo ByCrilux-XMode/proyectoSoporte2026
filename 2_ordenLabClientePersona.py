@@ -44,7 +44,7 @@ def poblar_movimiento_total():
         cursor.execute("""
             INSERT INTO orden_laboratorio (id_orden_lab, fecha_orden, estado, numero_orden, id_paciente, id_cliente, id_doctor, id_recepcionista)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", 
-            (id_orden, fecha_str, "tomado", 10000 + i, id_p, id_p, random.choice(ids_doctores), random.choice(ids_recepcionistas))
+            (id_orden, fecha_str, "Registrado", 10000 + i, id_p, id_p, random.choice(ids_doctores), random.choice(ids_recepcionistas))
         )
 
         # B. Lógica de Muestras: ¿Qué exámenes pidió y qué muestras generan?
