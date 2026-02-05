@@ -110,6 +110,7 @@ create table paciente( --metodo
     ci varchar(15) not null,
     id_genero int not null,
     id_provincia int not null,
+    edad int not null,
     foreign key (id_genero) references genero(id_genero),
     foreign key (id_provincia) references provincia(id_provincia)
 );
