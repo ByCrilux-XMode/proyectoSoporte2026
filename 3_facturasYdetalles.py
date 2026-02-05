@@ -17,9 +17,21 @@ def poblar_facturacion_masiva():
         print(f"Error de conexión: {e}")
         return
 
-    print("Iniciando proceso de facturación optimizado...")
+    print("Iniciando facturación masiva de alta velocidad...")
 
-    # 1. Obtener órdenes con información de convenio del cliente para calcular descuentos
+    # 1. CARGAR PRECIOS EN MEMORIA (Para no consultar la BD en cada vuelta)
+    # Creamos un diccionario: id_examen -> [(precio, fecha_inicio, fecha_fin), ...]
+    print("Cargando catálogo de precios...")
+    cursor.execute("SELECT id_examen, precio, fecha_inicio, ISNULL(fecha_fin, '2099-12-31') FROM examen_precio")
+    precios_db = cursor.fetchall()
+    mapa_precios = {}
+    for id_ex, precio, f_ini, f_fin in precios_db:
+        if id_ex not in mapa_precios:
+            mapa_precios[id_ex] = []
+        mapa_precios[id_ex].append({'p': float(precio), 'i': f_ini, 'f': f_fin})
+
+    # 2. OBTENER ÓRDENES Y CONVENIOS
+    print("Consultando órdenes pendientes de facturación...")
     cursor.execute("""
         SELECT 
             ol.id_orden_lab, 
@@ -31,91 +43,75 @@ def poblar_facturacion_masiva():
         JOIN cliente cl ON ol.id_cliente = cl.id_cliente
         JOIN convenio c ON cl.id_convenio = c.id_convenio
     """)
-    filas = cursor.fetchall()
-
-    # Estructura para agrupar detalles por factura
+    
     ordenes_procesadas = {}
     
-    # 2. Agrupación y cálculo de precios
-    for id_orden, fecha, id_ex, pct_descuento in filas:
-        # Buscamos el precio del examen vigente a la fecha de la orden
-        cursor.execute("""
-            SELECT precio 
-            FROM examen_precio 
-            WHERE id_examen = ? AND ? BETWEEN fecha_inicio AND ISNULL(fecha_fin, '2099-12-31')
-        """, (id_ex, fecha))
-        
-        res_precio = cursor.fetchone()
-        precio_v = float(res_precio[0]) if res_precio else 50.0 # Precio base si no encuentra
+    # 3. PROCESAMIENTO EN MEMORIA
+    for id_orden, fecha_o, id_ex, pct_desc in cursor.fetchall():
+        # Lógica de búsqueda de precio manual (mucho más rápido que SQL en bucle)
+        precio_v = 50.0 # Default
+        if id_ex in mapa_precios:
+            for rango in mapa_precios[id_ex]:
+                if rango['i'] <= fecha_o <= rango['f']:
+                    precio_v = rango['p']
+                    break
 
         if id_orden not in ordenes_procesadas:
             ordenes_procesadas[id_orden] = {
-                'fecha': fecha,
+                'fecha': fecha_o,
                 'detalles': [],
-                'subtotal_acumulado': 0.0,
-                'descuento_acumulado': 0.0,
-                'pct_conv': float(pct_descuento) / 100
+                'subtotal_gral': 0.0,
+                'desc_gral': 0.0,
+                'pct': float(pct_desc) / 100
             }
         
-        # Cálculo por línea (examen)
-        monto_descuento_linea = precio_v * ordenes_procesadas[id_orden]['pct_conv']
-        subtotal_linea = precio_v - monto_descuento_linea
+        monto_desc = precio_v * ordenes_procesadas[id_orden]['pct']
+        sub_linea = precio_v - monto_desc
         
-        # Guardamos id_ex para el nuevo detalle_factura
-        ordenes_procesadas[id_orden]['detalles'].append((precio_v, monto_descuento_linea, subtotal_linea, id_ex))
-        
-        # Acumuladores de la cabecera
-        ordenes_procesadas[id_orden]['subtotal_acumulado'] += precio_v
-        ordenes_procesadas[id_orden]['descuento_acumulado'] += monto_descuento_linea
+        ordenes_procesadas[id_orden]['detalles'].append((precio_v, monto_desc, sub_linea, id_ex))
+        ordenes_procesadas[id_orden]['subtotal_gral'] += precio_v
+        ordenes_procesadas[id_orden]['desc_gral'] += monto_desc
 
-    # 3. Inserción masiva
-    id_factura_cont = 1
-    id_det_fac_cont = 1
-    facturas_batch = []
-    detalles_f_batch = []
+    # 4. INSERCIÓN MASIVA (BATCHES)
+    id_f_cont = 1
+    id_df_cont = 1
+    f_batch = []
+    df_batch = []
+    
+    est_opciones = [1, 2, 3] # 1:Pagado, 2:Pendiente, 3:Anulado
+    est_pesos = [0.85, 0.10, 0.05]
 
-    estados = [1, 2, 3] # 1: Pagado, 2: Pendiente, 3: Anulado
-    pesos_est = [0.85, 0.10, 0.05]
-    metodos_pago = [1, 2, 3, 4] # Efectivo, QR, Tarjeta, Transferencia
+    print(f"Insertando {len(ordenes_procesadas)} facturas...")
 
     for id_orden, data in ordenes_procesadas.items():
-        sub_total = data['subtotal_acumulado']
-        tot_desc = data['descuento_acumulado']
-        total_final = sub_total - tot_desc
+        sub = data['subtotal_gral']
+        desc = data['desc_gral']
+        total = sub - desc
         
-        id_est = random.choices(estados, weights=pesos_est, k=1)[0]
-        id_met = random.choice(metodos_pago)
-        
-        # INSERT FACTURA
-        facturas_batch.append((
-            id_factura_cont, data['fecha'], sub_total, tot_desc, total_final, id_est, id_orden, id_met
-        ))
+        f_batch.append((id_f_cont, data['fecha'], sub, desc, total, 
+                        random.choices(est_opciones, weights=est_pesos)[0], 
+                        id_orden, random.randint(1, 4)))
 
-        for p_u, d_l, s_l, id_ex_fact in data['detalles']:
-            # INSERT DETALLE_FACTURA (Ahora apunta a id_examen directamente)
-            detalles_f_batch.append((
-                id_det_fac_cont, p_u, d_l, s_l, id_factura_cont, id_ex_fact
-            ))
-            id_det_fac_cont += 1
+        for p_u, d_l, s_l, id_ex in data['detalles']:
+            df_batch.append((id_df_cont, p_u, d_l, s_l, id_f_cont, id_ex))
+            id_df_cont += 1
         
-        id_factura_cont += 1
+        id_f_cont += 1
 
-        # Lotes de 1000 para no saturar la memoria ni la transacción
-        if len(facturas_batch) >= 1000:
-            cursor.executemany("INSERT INTO factura VALUES (?,?,?,?,?,?,?,?)", facturas_batch)
-            cursor.executemany("INSERT INTO detalle_factura VALUES (?,?,?,?,?,?)", detalles_f_batch)
+        if len(f_batch) >= 1000:
+            cursor.executemany("INSERT INTO factura VALUES (?,?,?,?,?,?,?,?)", f_batch)
+            cursor.executemany("INSERT INTO detalle_factura VALUES (?,?,?,?,?,?)", df_batch)
             con.commit()
-            facturas_batch, detalles_f_batch = [], []
-            print(f"Sincronizadas {id_factura_cont} facturas con sus detalles...")
+            f_batch, df_batch = [], []
 
-    # Insertar el resto
-    if facturas_batch:
-        cursor.executemany("INSERT INTO factura VALUES (?,?,?,?,?,?,?,?)", facturas_batch)
-        cursor.executemany("INSERT INTO detalle_factura VALUES (?,?,?,?,?,?)", detalles_f_batch)
+    # Remanentes
+    if f_batch:
+        cursor.executemany("INSERT INTO factura VALUES (?,?,?,?,?,?,?,?)", f_batch)
+        cursor.executemany("INSERT INTO detalle_factura VALUES (?,?,?,?,?,?)", df_batch)
         con.commit()
 
     con.close()
-    print(f"--- Proceso finalizado: {id_factura_cont-1} facturas generadas correctamente ---")
+    print(f"Éxito: {id_f_cont-1} facturas creadas correctamente.")
 
 if __name__ == "__main__":
     poblar_facturacion_masiva()
