@@ -10,85 +10,97 @@ def poblar_movimiento_total():
     con = pyodbc.connect(conn_str)
     cursor = con.cursor()
 
-    # 1. Cargar Requisitos de Muestra (Diccionario: id_examen -> id_tipo_muestra)
+    print("Sincronizando universos de IDs y Requisitos...")
+    
+    # 1. Obtenemos los IDs de pacientes (que por tu script anterior coinciden con los IDs de clientes)
+    cursor.execute("SELECT id_paciente FROM paciente")
+    ids_pacientes = [row[0] for row in cursor.fetchall()]
+    
+    # 2. Cargar Requisitos de Muestra (id_examen -> id_tipo_muestra)
     cursor.execute("SELECT id_examen, id_tipo_muestra FROM examen_requisito_muestra")
-    # Creamos un mapa para saber qué tipo de muestra necesita cada examen
     mapa_requisitos = {row[0]: row[1] for row in cursor.fetchall()}
 
-    # 2. Preparación de universos
-    ids_pacientes = list(range(1, 27378))
-    ids_examenes = list(range(1, 53))
-    ids_doctores = list(range(1, 11))
-    ids_recepcionistas = list(range(1, 10))
+    # 3. Cargar IDs de catálogos para evitar errores de FK
+    ids_examenes = [row[0] for row in cursor.execute("SELECT id_examen FROM examen").fetchall()]
+    ids_doctores = [row[0] for row in cursor.execute("SELECT id_doctor FROM doctor").fetchall()]
+    ids_recepcionistas = [row[0] for row in cursor.execute("SELECT id_recepcionista FROM recepcionista").fetchall()]
 
-    # TODOS tengan 1 visita + recurrencia
-    lista_ids_final = ids_pacientes.copy()
-    pacientes_frecuentes = random.sample(ids_pacientes, 8000)
-    for _ in range(12623):
-        lista_ids_final.append(random.choice(pacientes_frecuentes))
+    # 4. Generar lista de órdenes (Base + Recurrencia)
+    lista_ids_pacientes = ids_pacientes.copy()
+    # Simulamos que un 15% de los pacientes regresa para otro examen en el tiempo
+    pacientes_recurrentes = random.sample(ids_pacientes, int(len(ids_pacientes) * 0.20))
+    for _ in range(int(len(ids_pacientes) * 0.15)):
+        lista_ids_pacientes.append(random.choice(pacientes_recurrentes))
 
-    random.shuffle(lista_ids_final)
+    random.shuffle(lista_ids_pacientes)
 
-    # Contadores globales
+    # Contadores para las llaves primarias
     id_detalle_cont = 1
     id_muestra_cont = 1
+    
+    # Batches para inserción masiva
+    batch_ordenes = []
+    batch_muestras = []
+    batch_detalles = []
 
-    print(f"Generando {len(lista_ids_final)} órdenes con lógica de muestras...")
+    print(f"Generando {len(lista_ids_pacientes)} órdenes y sus movimientos...")
 
-    for i, id_p in enumerate(lista_ids_final, start=1):
+    for i, id_p in enumerate(lista_ids_pacientes, start=1):
         id_orden = i
-        fecha_dt = datetime(2024, 1, 1) + timedelta(days=random.randint(0, 730))
+        # El cliente es el mismo ID que el paciente (según tu script de poblado anterior)
+        id_c = id_p 
+        
+        fecha_dt = datetime(2025, 1, 1) + timedelta(days=random.randint(0, 400))
         fecha_str = fecha_dt.strftime('%Y-%m-%d')
         
-        # A. Crear Orden
-        cursor.execute("""
-            INSERT INTO orden_laboratorio (id_orden_lab, fecha_orden, estado, numero_orden, id_paciente, id_cliente, id_doctor, id_recepcionista)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", 
-            (id_orden, fecha_str, "Registrado", 10000 + i, id_p, id_p, random.choice(ids_doctores), random.choice(ids_recepcionistas))
-        )
+        # A. INSERT ORDEN_LABORATORIO
+        # Columnas: id_orden_lab, fecha_orden, estado, numero_orden, id_paciente, id_cliente, id_doctor, id_recepcionista
+        batch_ordenes.append((
+            id_orden, fecha_str, "Registrado", 10000 + i, id_p, id_c, 
+            random.choice(ids_doctores), random.choice(ids_recepcionistas)
+        ))
 
-        # B. Lógica de Muestras: ¿Qué exámenes pidió y qué muestras generan?
-        n_ex = random.choices([1, 2, 3, 4, 5], weights=[0.4, 0.3, 0.2, 0.08, 0.02], k=1)[0]
-        examenes_seleccionados = random.sample(ids_examenes, n_ex)
+        # B. LÓGICA DE EXÁMENES Y MUESTRAS
+        n_ex = random.choices([1, 2, 3, 4], weights=[0.5, 0.3, 0.15, 0.05], k=1)[0]
+        examenes_sel = random.sample(ids_examenes, n_ex)
+        muestras_en_esta_orden = {} 
 
-        # Agrupamos exámenes por el tipo de muestra que requieren para no crear tubos de más
-        # Ejemplo: Si 2 exámenes piden 'Sangre', se crea 1 sola muestra de sangre.
-        muestras_de_esta_orden = {} # Tipo_Muestra -> ID_Muestra_Generado
+        for id_ex in examenes_sel:
+            tipo_m_necesario = mapa_requisitos.get(id_ex, 1) 
 
-        for id_ex in examenes_seleccionados:
-            tipo_necesario = mapa_requisitos.get(id_ex, 1) # Default 1 si no hay requisito
-
-            if tipo_necesario not in muestras_de_esta_orden:
-                # Insertar nueva muestra física
+            if tipo_m_necesario not in muestras_en_esta_orden:
                 cod_m = f"M-{id_p}-{id_muestra_cont}"
-                cursor.execute("""
-                    INSERT INTO muestra (id_muestra, fecha_toma, estado, codigo_muestra, id_tipo_muestra)
-                    VALUES (?, ?, ?, ?, ?)""",
-                    (id_muestra_cont, fecha_str, "Recolectada", cod_m, tipo_necesario)
-                )
-                muestras_de_esta_orden[tipo_necesario] = id_muestra_cont
-                id_muestra_actual = id_muestra_cont
+                # Tabla muestra: id_muestra, fecha_toma, estado, observacion, codigo_muestra, id_tipo_muestra
+                batch_muestras.append((id_muestra_cont, fecha_str, "Recolectada", None, cod_m, tipo_m_necesario))
+                muestras_en_esta_orden[tipo_m_necesario] = id_muestra_cont
+                id_m_actual = id_muestra_cont
                 id_muestra_cont += 1
             else:
-                # Ya existe un tubo para este tipo de muestra en esta orden
-                id_muestra_actual = muestras_de_esta_orden[tipo_necesario]
+                id_m_actual = muestras_en_esta_orden[tipo_m_necesario]
 
-            # C. Crear Detalle de Orden vinculado a la Muestra
-            cursor.execute("""
-                INSERT INTO detalle_orden_examen (id_detalle_orden_examen, id_orden_lab, id_examen, id_muestra)
-                VALUES (?, ?, ?, ?)""",
-                (id_detalle_cont, id_orden, id_ex, id_muestra_actual)
-            )
+            # C. INSERT DETALLE_ORDEN_EXAMEN
+            # Columnas: id_detalle_orden_examen, id_orden_lab, id_examen, id_muestra
+            batch_detalles.append((id_detalle_cont, id_orden, id_ex, id_m_actual))
             id_detalle_cont += 1
 
-        # Control de transacciones cada 500 órdenes para no saturar
-        if i % 500 == 0:
+        # Ejecución por lotes para velocidad (cada 1000 órdenes)
+        if i % 1000 == 0:
+            cursor.executemany("INSERT INTO orden_laboratorio VALUES (?,?,?,?,?,?,?,?)", batch_ordenes)
+            cursor.executemany("INSERT INTO muestra VALUES (?,?,?,?,?,?)", batch_muestras)
+            cursor.executemany("INSERT INTO detalle_orden_examen VALUES (?,?,?,?)", batch_detalles)
             con.commit()
-            print(f"Progreso: {i} órdenes y sus muestras procesadas...")
+            batch_ordenes, batch_muestras, batch_detalles = [], [], []
+            print(f"Progreso: {i} órdenes insertadas exitosamente...")
 
-    con.commit()
+    # Inserción de los últimos registros
+    if batch_ordenes:
+        cursor.executemany("INSERT INTO orden_laboratorio VALUES (?,?,?,?,?,?,?,?)", batch_ordenes)
+        cursor.executemany("INSERT INTO muestra VALUES (?,?,?,?,?,?)", batch_muestras)
+        cursor.executemany("INSERT INTO detalle_orden_examen VALUES (?,?,?,?)", batch_detalles)
+        con.commit()
+
     con.close()
-    print("--- Proceso finalizado: Órdenes y Muestras sincronizadas ---")
+    print(f"--- Proceso Terminado: {len(lista_ids_pacientes)} órdenes creadas ---")
 
 if __name__ == "__main__":
     poblar_movimiento_total()
