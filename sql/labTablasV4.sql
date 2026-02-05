@@ -1,4 +1,4 @@
-create database LabX2;
+--create database LabX2;
 --use LabX2;
 
 create table departamento( --listo
